@@ -1,0 +1,27 @@
+# RustPi Boot Configuration
+# For Raspberry Pi 3A+/3B/3B+
+
+# Enable 64-bit mode
+arm_64bit=1
+
+# Kernel image
+kernel=kernel8.img
+
+# Device tree for Pi 3B+
+# Change to bcm2710-rpi-3-b.dtb for Pi 3B
+device_tree=bcm2710-rpi-3-b-plus.dtb
+
+# Enable UART for serial console
+enable_uart=1
+
+# Disable audio (not needed)
+dtparam=audio=off
+
+# Minimal GPU memory
+gpu_mem=16
+
+# Disable splash screen for faster boot
+disable_splash=1
+
+# Disable overscan
+disable_overscan=1

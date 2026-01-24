@@ -1,0 +1,51 @@
+# Build outputs
+build/
+target/
+*.img
+*.o
+*.a
+*.so
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+
+# External dependencies (cloned during build)
+busybox/
+dropbear/
+firmware/
+
+# Mounted directories
+mnt/
+
+# Sensitive files - NEVER commit these
+*.pem
+*.key
+shadow
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+dropbear_*_host_key
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
