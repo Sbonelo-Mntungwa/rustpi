@@ -7,10 +7,6 @@ arm_64bit=1
 # Kernel image
 kernel=kernel8.img
 
-# Device tree for Pi 3B+
-# Change to bcm2710-rpi-3-b.dtb for Pi 3B
-device_tree=bcm2710-rpi-3-b-plus.dtb
-
 # Enable UART for serial console
 enable_uart=1
 

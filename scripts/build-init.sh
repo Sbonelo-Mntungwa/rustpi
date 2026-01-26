@@ -11,6 +11,11 @@ INIT_DIR="$PROJECT_DIR/init"
 
 echo "[init] Building Rust init system..."
 
+# Ensure cargo is in path (for Vagrant)
+if [ -f "$HOME/.cargo/env" ]; then
+    source "$HOME/.cargo/env"
+fi
+
 cd "$INIT_DIR"
 
 # Build for ARM64 with static linking (musl)

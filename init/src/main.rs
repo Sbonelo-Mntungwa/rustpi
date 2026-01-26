@@ -5,10 +5,9 @@
 
 use nix::mount::{mount, MsFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{chown, execv, fork, sethostname, ForkResult, Pid, Uid, Gid};
+use nix::unistd::{execv, fork, sethostname, ForkResult, Pid};
 use std::ffi::CString;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self};
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
@@ -57,42 +56,32 @@ fn print_banner() {
 }
 
 fn init_system() -> Result<(), Box<dyn std::error::Error>> {
-    // Mount essential filesystems
     mount_filesystems()?;
     println!("[init] Mounted filesystems");
 
-    // Setup hostname
     setup_hostname()?;
 
-    // Setup device nodes
     setup_devices()?;
     println!("[init] Device nodes ready");
 
-    // Load kernel modules for networking
     load_kernel_modules();
 
-    // Setup networking
     setup_networking();
 
-    // Generate SSH host keys if needed
     setup_ssh_keys();
 
-    // Start SSH server
     start_ssh_server();
 
-    // Spawn login shell on console
     spawn_shell();
 
     Ok(())
 }
 
 fn mount_filesystems() -> Result<(), Box<dyn std::error::Error>> {
-    // Create mount points if they don't exist
     for dir in &["/proc", "/sys", "/dev", "/dev/pts", "/tmp", "/run"] {
         fs::create_dir_all(dir).ok();
     }
 
-    // Mount proc
     mount(
         Some("proc"),
         "/proc",
@@ -101,7 +90,6 @@ fn mount_filesystems() -> Result<(), Box<dyn std::error::Error>> {
         None::<&str>,
     )?;
 
-    // Mount sysfs
     mount(
         Some("sysfs"),
         "/sys",
@@ -110,7 +98,6 @@ fn mount_filesystems() -> Result<(), Box<dyn std::error::Error>> {
         None::<&str>,
     )?;
 
-    // Mount devtmpfs
     mount(
         Some("devtmpfs"),
         "/dev",
@@ -119,7 +106,6 @@ fn mount_filesystems() -> Result<(), Box<dyn std::error::Error>> {
         Some("mode=0755"),
     )?;
 
-    // Mount devpts for PTY support
     mount(
         Some("devpts"),
         "/dev/pts",
@@ -128,7 +114,6 @@ fn mount_filesystems() -> Result<(), Box<dyn std::error::Error>> {
         Some("mode=0620,ptmxmode=0666"),
     )?;
 
-    // Mount tmpfs on /tmp
     mount(
         Some("tmpfs"),
         "/tmp",
@@ -137,7 +122,6 @@ fn mount_filesystems() -> Result<(), Box<dyn std::error::Error>> {
         Some("mode=1777"),
     )?;
 
-    // Mount tmpfs on /run
     mount(
         Some("tmpfs"),
         "/run",
@@ -166,7 +150,6 @@ fn setup_hostname() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn setup_devices() -> Result<(), Box<dyn std::error::Error>> {
-    // Create essential device symlinks
     let dev_links = [
         ("/dev/fd", "/proc/self/fd"),
         ("/dev/stdin", "/proc/self/fd/0"),
@@ -180,7 +163,6 @@ fn setup_devices() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Create /dev/ptmx symlink if needed
     if !Path::new("/dev/ptmx").exists() {
         symlink("/dev/pts/ptmx", "/dev/ptmx").ok();
     }
@@ -191,13 +173,12 @@ fn setup_devices() -> Result<(), Box<dyn std::error::Error>> {
 fn load_kernel_modules() {
     println!("[init] Loading kernel modules...");
 
-    // Common USB-Ethernet drivers
     let modules = [
-        "dm9601",      // Davicom DM9601
-        "asix",        // ASIX AX88xxx
-        "cdc_ether",   // CDC Ethernet
-        "r8152",       // Realtek RTL8152/RTL8153
-        "smsc95xx",    // SMSC LAN95xx
+        "dm9601",
+        "asix",
+        "cdc_ether",
+        "r8152",
+        "smsc95xx",
     ];
 
     for module in &modules {
@@ -205,42 +186,35 @@ fn load_kernel_modules() {
             .arg(module)
             .output();
 
-        match result {
-            Ok(output) if output.status.success() => {
+        if let Ok(output) = result {
+            if output.status.success() {
                 println!("[init] Loaded module: {}", module);
-            }
-            _ => {
-                // Module might not exist or already loaded, that's okay
             }
         }
     }
 
-    // Wait for devices to settle
     thread::sleep(Duration::from_secs(2));
 }
 
 fn setup_networking() {
     println!("[init] Configuring network...");
 
-    // Find available network interface
     let interface = find_network_interface();
 
     if let Some(iface) = interface {
         println!("[init] Found network interface: {}", iface);
 
-        // Bring interface up
         Command::new("/sbin/ifconfig")
             .args([&iface, "up"])
             .output()
             .ok();
 
-        // Start DHCP client
         let dhcp_result = Command::new("/sbin/udhcpc")
             .args([
                 "-i", &iface,
                 "-s", "/usr/share/udhcpc/default.script",
                 "-p", "/var/run/udhcpc.pid",
-                "-b",  // Background after lease
+                "-b",
             ])
             .output();
 
@@ -256,10 +230,8 @@ fn setup_networking() {
             }
         }
 
-        // Wait for IP address
         thread::sleep(Duration::from_secs(3));
 
-        // Show IP address
         if let Ok(output) = Command::new("/sbin/ifconfig").arg(&iface).output() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
@@ -274,7 +246,6 @@ fn setup_networking() {
 }
 
 fn find_network_interface() -> Option<String> {
-    // Check for common interface names
     let interfaces = ["eth0", "usb0", "enp0s", "end0"];
 
     for iface in &interfaces {
@@ -284,7 +255,6 @@ fn find_network_interface() -> Option<String> {
         }
     }
 
-    // Scan /sys/class/net for any non-loopback interface
     if let Ok(entries) = fs::read_dir("/sys/class/net") {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -303,7 +273,6 @@ fn setup_ssh_keys() {
         ("ecdsa", "/etc/dropbear/dropbear_ecdsa_host_key"),
     ];
 
-    // Create dropbear directory
     fs::create_dir_all("/etc/dropbear").ok();
 
     for (key_type, key_path) in &key_types {
@@ -322,12 +291,11 @@ fn start_ssh_server() {
 
     match unsafe { fork() } {
         Ok(ForkResult::Child) => {
-            // Child process - start dropbear
             let args = [
                 CString::new("/bin/dropbear").unwrap(),
-                CString::new("-F").unwrap(),  // Foreground
-                CString::new("-E").unwrap(),  // Log to stderr
-                CString::new("-R").unwrap(),  // Create host keys if needed
+                CString::new("-F").unwrap(),
+                CString::new("-E").unwrap(),
+                CString::new("-R").unwrap(),
             ];
 
             let arg_refs: Vec<&CString> = args.iter().collect();
@@ -348,13 +316,11 @@ fn spawn_shell() {
 
     match unsafe { fork() } {
         Ok(ForkResult::Child) => {
-            // Child process - spawn shell
             let args = [
                 CString::new("/bin/sh").unwrap(),
-                CString::new("-l").unwrap(),  // Login shell
+                CString::new("-l").unwrap(),
             ];
 
-            // Set environment variables
             std::env::set_var("HOME", "/root");
             std::env::set_var("TERM", "linux");
             std::env::set_var("PATH", "/bin:/sbin:/usr/bin:/usr/sbin");
@@ -376,14 +342,12 @@ fn spawn_shell() {
 fn emergency_shell() {
     eprintln!("[init] Dropping to emergency shell...");
 
-    // Try to spawn a shell directly
     let args = [
         CString::new("/bin/sh").unwrap(),
     ];
     let arg_refs: Vec<&CString> = args.iter().collect();
     execv(&args[0], &arg_refs).ok();
 
-    // If that fails, just loop
     loop {
         thread::sleep(Duration::from_secs(1));
     }

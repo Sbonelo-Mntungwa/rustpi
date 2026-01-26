@@ -17,8 +17,120 @@ RustPi demonstrates that building your own Linux distribution is achievable. The
 - **Fast Boot** — ~3 second boot time to shell
 - **SSH Access** — Dropbear SSH server for remote management
 - **USB Networking** — Support for USB-Ethernet adapters with DHCP
+- **Vagrant Build** — Reproducible build environment with Vagrant
 
-### System Architecture
+## Quick Start with Vagrant
+
+The easiest way to build RustPi is using Vagrant. This gives you a consistent build environment regardless of your host OS.
+
+### Prerequisites
+
+- [Vagrant](https://www.vagrantup.com/downloads)
+- [VirtualBox](https://www.virtualbox.org/wiki/Downloads) (or VMware)
+
+### Build
+
+```bash
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/rustpi.git
+cd rustpi
+
+# Start the build VM (downloads Ubuntu, installs tools)
+vagrant up
+
+# SSH into the VM and build
+vagrant ssh
+build
+
+# Or one-liner:
+vagrant ssh -c "cd /vagrant && ./scripts/build-all.sh"
+```
+
+The built image will be available at `./output/rustpi-latest.img` on your host machine.
+
+### Flash to SD Card
+
+```bash
+# On your HOST machine (not in Vagrant)
+# Replace /dev/sdX with your SD card device
+sudo ./scripts/flash-sd.sh /dev/sdX
+```
+
+### Vagrant Commands
+
+| Command | Description |
+|---------|-------------|
+| `vagrant up` | Start and provision the VM |
+| `vagrant ssh` | SSH into the VM |
+| `vagrant halt` | Stop the VM |
+| `vagrant destroy` | Delete the VM completely |
+| `vagrant provision` | Re-run setup scripts |
+
+Inside the VM:
+| Command | Description |
+|---------|-------------|
+| `build` | Build RustPi (alias) |
+| `clean` | Clean build artifacts |
+| `cd /vagrant` | Go to project directory |
+
+## Native Linux Build
+
+If you prefer to build without Vagrant on a native Linux system:
+
+### Prerequisites
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y \
+    build-essential \
+    gcc-aarch64-linux-gnu \
+    git wget curl \
+    parted dosfstools e2fsprogs kpartx
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add aarch64-unknown-linux-musl
+```
+
+### Build
+
+```bash
+./scripts/build-all.sh
+sudo ./scripts/flash-sd.sh /dev/sdX
+```
+
+## Project Structure
+
+```
+rustpi/
+├── Vagrantfile             # Vagrant VM configuration
+├── init/                   # Rust init system source
+│   ├── Cargo.toml
+│   └── src/main.rs
+├── rootfs/                 # Root filesystem configuration
+│   └── etc/
+│       └── hostname
+├── boot/                   # Boot partition files
+│   ├── config.txt
+│   └── cmdline.txt
+├── scripts/                # Build automation
+│   ├── build-all.sh        # Main build script
+│   ├── build-init.sh       # Build Rust init
+│   ├── build-busybox.sh    # Build BusyBox
+│   ├── build-dropbear.sh   # Build Dropbear SSH
+│   ├── create-rootfs.sh    # Assemble root filesystem
+│   ├── create-image.sh     # Create SD card image
+│   ├── flash-sd.sh         # Flash to SD card
+│   └── clean.sh            # Clean build artifacts
+├── configs/                # Build configurations
+│   └── busybox.config
+├── output/                 # Built images (on host)
+└── docs/                   # Documentation
+    ├── BUILDING.md
+    └── DEBUGGING.md
+```
+
+## System Architecture
 
 ```
 ┌─────────────────────────────────────┐
@@ -37,108 +149,6 @@ RustPi demonstrates that building your own Linux distribution is achievable. The
 └─────────────────────────────────────┘
 ```
 
-## Quick Start
-
-### Prerequisites
-
-- Linux host (or VM) with:
-  - `aarch64-linux-gnu-gcc` cross-compiler
-  - Rust with `aarch64-unknown-linux-musl` target
-  - Standard build tools (`make`, `git`, `parted`, etc.)
-- Raspberry Pi 3A+ (or 3B/3B+/4)
-- SD card (1GB minimum)
-- USB-Ethernet adapter (for Pi 3A+)
-
-### Build
-
-```bash
-# Clone repository
-git clone https://github.com/YOUR_USERNAME/rustpi.git
-cd rustpi
-
-# Install Rust target
-rustup target add aarch64-unknown-linux-musl
-
-# Run full build
-./scripts/build-all.sh
-
-# Flash to SD card (replace /dev/sdX)
-./scripts/flash-sd.sh /dev/sdX
-```
-
-### Connect
-
-```bash
-# Find Pi's IP (check your router or use serial console)
-ssh root@<PI_IP_ADDRESS>
-# Default: no password (press Enter)
-```
-
-## Project Structure
-
-```
-rustpi/
-├── init/                   # Rust init system source
-│   ├── Cargo.toml
-│   └── src/main.rs
-├── rootfs/                 # Root filesystem configuration
-│   ├── etc/
-│   │   ├── passwd
-│   │   ├── group
-│   │   └── hostname
-│   └── usr/share/udhcpc/
-│       └── default.script
-├── boot/                   # Boot partition files
-│   ├── config.txt
-│   └── cmdline.txt
-├── scripts/                # Build automation
-│   ├── build-all.sh
-│   ├── build-init.sh
-│   ├── build-busybox.sh
-│   ├── build-dropbear.sh
-│   ├── create-rootfs.sh
-│   ├── create-image.sh
-│   └── flash-sd.sh
-├── configs/                # Build configurations
-│   └── busybox.config
-└── docs/                   # Documentation
-    ├── BUILDING.md
-    └── DEBUGGING.md
-```
-
-## Documentation
-
-- [Building from Source](docs/BUILDING.md) — Detailed build instructions
-- [Debugging Guide](docs/DEBUGGING.md) — Common issues and solutions
-
-## How It Works
-
-### Boot Sequence
-
-1. **GPU Boot** — VideoCore loads `bootcode.bin` from SD card
-2. **Firmware** — `start.elf` reads `config.txt`, loads kernel
-3. **Kernel** — Linux initializes hardware, mounts root filesystem
-4. **Init** — Rust init (`/sbin/init`) becomes PID 1
-5. **Services** — Init mounts filesystems, configures network, starts SSH
-6. **Ready** — System ready for login
-
-### The Rust Init System
-
-The init system handles:
-
-```rust
-fn main() {
-    mount_filesystems();    // /proc, /sys, /dev, /tmp
-    setup_hostname();       // Set system hostname
-    setup_devices();        // Create device symlinks
-    load_kernel_modules();  // USB-Ethernet driver
-    setup_networking();     // DHCP configuration
-    start_ssh_server();     // Dropbear daemon
-    spawn_shell();          // Login shell
-    reap_zombies();         // Process supervision
-}
-```
-
 ## Components
 
 | Component | Purpose | Size |
@@ -149,6 +159,17 @@ fn main() {
 | Linux Kernel | Pre-built from RPi firmware | ~8MB |
 | Root FS | Configs, libs, symlinks | ~20MB |
 
+## Connect to Your Pi
+
+After flashing and booting:
+
+```bash
+# Find your Pi's IP (check router or use serial console)
+ssh root@<IP_ADDRESS>
+
+# Default: no password (just press Enter)
+```
+
 ## Configuration
 
 ### Boot Config (`boot/config.txt`)
@@ -156,8 +177,9 @@ fn main() {
 ```ini
 arm_64bit=1
 kernel=kernel8.img
-device_tree=bcm2710-rpi-3-b-plus.dtb
 enable_uart=1
+dtparam=audio=off
+gpu_mem=16
 ```
 
 ### Kernel Parameters (`boot/cmdline.txt`)
@@ -166,45 +188,24 @@ enable_uart=1
 console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 rootwait rw init=/sbin/init
 ```
 
-## Customization
-
-### Adding a New Service
-
-Edit `init/src/main.rs`:
-
-```rust
-fn start_my_service() {
-    spawn_daemon("/usr/bin/my-service", &["--daemon"]);
-}
-```
-
-### Changing Hostname
-
-Edit `rootfs/etc/hostname`:
-
-```
-my-custom-pi
-```
-
-### Adding Packages
-
-Add binaries to `create-rootfs.sh` and ensure they're statically linked or include required libraries.
-
 ## Troubleshooting
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
 | No green LED | Missing `bootcode.bin` | Copy from RPi firmware |
 | Kernel panic | Wrong kernel format | Use pre-built `kernel8.img` |
-| Init not found | Dynamic linking | Build with `--target aarch64-unknown-linux-musl` |
+| Init not found | Dynamic linking | Build with musl target |
 | No network | Wrong driver | Check USB ID, load correct module |
 | SSH denied | File ownership | `chown 0:0 /etc/passwd /etc/shadow` |
 
-See [DEBUGGING.md](docs/DEBUGGING.md) for detailed solutions.
+See [docs/DEBUGGING.md](docs/DEBUGGING.md) for detailed solutions.
+
+## Documentation
+
+- [Building from Source](docs/BUILDING.md) — Detailed build instructions
+- [Debugging Guide](docs/DEBUGGING.md) — Common issues and solutions
 
 ## Contributing
-
-Contributions welcome! Please:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing`)

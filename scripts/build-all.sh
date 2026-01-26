@@ -1,6 +1,8 @@
 #!/bin/bash
 #
 # RustPi Build Script - Builds all components
+# 
+# This script can run both inside Vagrant VM and on native Linux.
 #
 set -e
 
@@ -8,9 +10,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 
+# Detect if running in Vagrant
+if [ -d "/vagrant" ] && [ "$PROJECT_DIR" = "/vagrant" ]; then
+    OUTPUT_DIR="/home/vagrant/output"
+    IN_VAGRANT=true
+else
+    OUTPUT_DIR="$PROJECT_DIR/output"
+    IN_VAGRANT=false
+fi
+
 echo "============================================="
 echo "  RustPi Full Build"
 echo "============================================="
+echo ""
+echo "Project:  $PROJECT_DIR"
+echo "Build:    $BUILD_DIR"
+echo "Output:   $OUTPUT_DIR"
+echo "Vagrant:  $IN_VAGRANT"
 echo ""
 
 # Check prerequisites
@@ -28,11 +44,15 @@ check_prerequisites() {
     if [ ${#missing[@]} -ne 0 ]; then
         echo "[!] Missing required tools: ${missing[*]}"
         echo ""
-        echo "Install on Ubuntu/Debian:"
-        echo "  sudo apt install gcc-aarch64-linux-gnu build-essential git parted"
-        echo ""
-        echo "Install Rust:"
-        echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        if [ "$IN_VAGRANT" = true ]; then
+            echo "Try: vagrant provision"
+        else
+            echo "Install on Ubuntu/Debian:"
+            echo "  sudo apt install gcc-aarch64-linux-gnu build-essential git parted"
+            echo ""
+            echo "Or use Vagrant:"
+            echo "  vagrant up && vagrant ssh"
+        fi
         exit 1
     fi
     
@@ -45,11 +65,11 @@ check_prerequisites() {
     echo "[✓] All prerequisites met"
 }
 
-# Create build directory
-setup_build_dir() {
-    echo "[*] Setting up build directory..."
+# Create directories
+setup_dirs() {
+    echo "[*] Setting up directories..."
     mkdir -p "$BUILD_DIR"
-    cd "$BUILD_DIR"
+    mkdir -p "$OUTPUT_DIR"
 }
 
 # Build components
@@ -75,18 +95,42 @@ build_all() {
     "$SCRIPT_DIR/create-image.sh"
 }
 
+# Copy output
+copy_output() {
+    echo ""
+    echo "[*] Copying output..."
+    
+    if [ -f "$BUILD_DIR/sdcard.img" ]; then
+        cp "$BUILD_DIR/sdcard.img" "$OUTPUT_DIR/rustpi-$(date +%Y%m%d).img"
+        
+        # Also keep a "latest" symlink/copy
+        cp "$BUILD_DIR/sdcard.img" "$OUTPUT_DIR/rustpi-latest.img"
+        
+        echo "[✓] Image copied to $OUTPUT_DIR/"
+    fi
+}
+
 # Main
 check_prerequisites
-setup_build_dir
+setup_dirs
 build_all
+copy_output
 
 echo ""
 echo "============================================="
 echo "  Build Complete!"
 echo "============================================="
 echo ""
-echo "Output: $BUILD_DIR/sdcard.img"
+echo "Output files:"
+ls -lh "$OUTPUT_DIR"/*.img 2>/dev/null || echo "  (no images found)"
 echo ""
-echo "Flash to SD card:"
-echo "  sudo $SCRIPT_DIR/flash-sd.sh /dev/sdX"
+if [ "$IN_VAGRANT" = true ]; then
+    echo "Images are available on your host at: ./output/"
+    echo ""
+    echo "Flash to SD card (on host):"
+    echo "  sudo dd if=output/rustpi-latest.img of=/dev/sdX bs=4M status=progress"
+else
+    echo "Flash to SD card:"
+    echo "  sudo $SCRIPT_DIR/flash-sd.sh /dev/sdX"
+fi
 echo ""

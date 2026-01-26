@@ -11,6 +11,7 @@ CONFIG_FILE="$PROJECT_DIR/configs/busybox.config"
 
 echo "[busybox] Building BusyBox..."
 
+mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 # Clone BusyBox if not present
@@ -20,6 +21,9 @@ if [ ! -d "busybox" ]; then
 fi
 
 cd busybox
+
+# Clean previous build
+make distclean 2>/dev/null || true
 
 # Use custom config or create default
 if [ -f "$CONFIG_FILE" ]; then
@@ -37,6 +41,7 @@ else
 fi
 
 # Build
+echo "[busybox] Compiling (this may take a few minutes)..."
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
 
 # Copy binary

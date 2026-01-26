@@ -1,65 +1,43 @@
 # Debugging RustPi
 
-This guide covers common issues and how to solve them.
+Common issues and their solutions.
 
 ## Boot Issues
 
 ### No Green LED Activity
 
-**Symptom:** Power LED is on (red), but no green activity LED blinking.
+**Symptom:** Power LED on, no green activity LED.
 
-**Cause:** The GPU can't find or load `bootcode.bin`.
+**Cause:** GPU can't load bootcode.bin.
 
-**Solutions:**
-1. Verify boot partition is FAT32
-2. Check these files exist on boot partition:
-   - `bootcode.bin`
-   - `start.elf`
-   - `fixup.dat`
-3. Re-copy files from Raspberry Pi firmware repository
-
+**Solution:**
 ```bash
-# Verify boot partition
-sudo mount /dev/mmcblk0p1 /mnt
-ls -la /mnt
-# Should show: bootcode.bin, start.elf, fixup.dat, kernel8.img, config.txt, cmdline.txt
+# Check boot partition has required files
+ls /mnt/boot/
+# Must have: bootcode.bin, start.elf, fixup.dat, kernel8.img
 ```
 
-### Rainbow Screen
+### Rainbow Screen Then Nothing
 
-**Symptom:** Display shows rainbow gradient, then nothing.
+**Symptom:** Display shows rainbow, then black.
 
-**Cause:** Kernel not loading properly.
+**Cause:** Kernel not loading.
 
-**Solutions:**
-1. Verify `kernel8.img` exists on boot partition
-2. Check `config.txt` has correct `kernel=kernel8.img`
-3. Verify device tree file matches your Pi model
+**Solution:**
+- Verify `kernel8.img` exists on boot partition
+- Check `config.txt` has `kernel=kernel8.img`
 
 ### Kernel Panic - VFS Unable to Mount Root
 
-**Symptom:** 
+**Symptom:**
 ```
 Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(179,2)
 ```
 
-**Causes & Solutions:**
-
-1. **Wrong root device in cmdline.txt**
-   ```bash
-   # Should be:
-   root=/dev/mmcblk0p2
-   ```
-
-2. **Root partition not ext4**
-   ```bash
-   # Check filesystem type
-   sudo file -s /dev/mmcblk0p2
-   # Should show: ext4 filesystem
-   ```
-
-3. **Kernel missing SD card driver**
-   - Use pre-built kernel from RPi firmware (has all drivers)
+**Solutions:**
+1. Check `cmdline.txt` has correct root device: `root=/dev/mmcblk0p2`
+2. Verify root partition is ext4: `sudo file -s /dev/mmcblk0p2`
+3. Use pre-built kernel from RPi firmware
 
 ### Kernel Panic - No Init Found
 
@@ -68,167 +46,126 @@ Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(179,2)
 Kernel panic - not syncing: No init found
 ```
 
-**Causes & Solutions:**
+**Solutions:**
 
-1. **Init binary missing**
-   ```bash
-   # Check init exists
-   ls -la /mnt/root/sbin/init
-   ```
+1. Check init exists:
+```bash
+ls -la /mnt/root/sbin/init
+```
 
-2. **Init not executable**
-   ```bash
-   chmod 755 /mnt/root/sbin/init
-   ```
+2. Check init is executable:
+```bash
+chmod 755 /mnt/root/sbin/init
+```
 
-3. **Init dynamically linked (needs glibc)**
-   ```bash
-   # Check if statically linked
-   file /mnt/root/sbin/init
-   # Should show: "statically linked"
-   
-   # If not, rebuild with musl:
-   cargo build --release --target aarch64-unknown-linux-musl
-   ```
+3. Check init is statically linked:
+```bash
+file /mnt/root/sbin/init
+# Should show: "statically linked"
+```
 
-4. **Wrong architecture**
-   ```bash
-   file /mnt/root/sbin/init
-   # Should show: "ARM aarch64" or "ARM64"
-   ```
+4. Rebuild with musl:
+```bash
+cargo build --release --target aarch64-unknown-linux-musl
+```
 
 ## Network Issues
 
 ### No Network Interface
 
-**Symptom:** `ifconfig` shows only `lo` (loopback).
+**Symptom:** `ifconfig` shows only `lo`.
 
-**Causes & Solutions:**
+**Solutions:**
 
-1. **USB-Ethernet not plugged in**
-   - Check physical connection
+1. Check USB-Ethernet is plugged in
 
-2. **Wrong driver loaded**
-   ```bash
-   # Find USB device ID
-   cat /sys/bus/usb/devices/*/idVendor
-   cat /sys/bus/usb/devices/*/idProduct
-   
-   # Look up driver needed
-   grep "VENDOR_ID" /lib/modules/*/modules.alias
-   
-   # Load correct driver
-   modprobe dm9601  # or asix, cdc_ether, r8152, etc.
-   ```
+2. Find USB device ID:
+```bash
+cat /sys/bus/usb/devices/*/idVendor
+cat /sys/bus/usb/devices/*/idProduct
+```
 
-3. **Kernel modules missing**
-   - Copy modules from firmware repository:
-   ```bash
-   cp -r firmware/modules/* /lib/modules/
-   ```
+3. Load correct driver:
+```bash
+modprobe dm9601   # Davicom
+modprobe asix     # ASIX
+modprobe r8152    # Realtek
+```
 
-### DHCP Gets IP But No Internet
+### DHCP Fails
 
-**Symptom:** `udhcpc` reports lease obtained, but can't ping anything.
+**Symptom:** No IP address assigned.
 
-**Causes & Solutions:**
+**Solutions:**
 
-1. **Missing UDHCPC script**
-   ```bash
-   # Check script exists
-   cat /usr/share/udhcpc/default.script
-   
-   # Make executable
-   chmod 755 /usr/share/udhcpc/default.script
-   ```
+1. Check UDHCPC script:
+```bash
+cat /usr/share/udhcpc/default.script
+chmod 755 /usr/share/udhcpc/default.script
+```
 
-2. **Default route not set**
-   ```bash
-   # Check routes
-   route -n
-   
-   # Manually add if missing
-   route add default gw 192.168.1.1 eth0
-   ```
+2. Check resolv.conf writable:
+```bash
+touch /etc/resolv.conf
+```
 
-3. **DNS not configured**
-   ```bash
-   # Check resolv.conf
-   cat /etc/resolv.conf
-   
-   # Add DNS server manually
-   echo "nameserver 8.8.8.8" > /etc/resolv.conf
-   ```
+3. Run DHCP manually:
+```bash
+udhcpc -i eth0 -v
+```
 
 ## SSH Issues
 
 ### Connection Refused
 
-**Symptom:** `ssh: connect to host X.X.X.X port 22: Connection refused`
+**Symptom:** `ssh: connect to host X port 22: Connection refused`
 
-**Causes & Solutions:**
+**Solutions:**
 
-1. **Dropbear not running**
-   ```bash
-   # On the Pi, check if running
-   ps | grep dropbear
-   
-   # Start manually
-   /bin/dropbear -F -E -R
-   ```
+1. Check Dropbear running:
+```bash
+ps | grep dropbear
+```
 
-2. **Host keys not generated**
-   ```bash
-   # Generate keys
-   mkdir -p /etc/dropbear
-   dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key
-   dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key
-   ```
+2. Start manually:
+```bash
+/bin/dropbear -F -E -R
+```
+
+3. Generate host keys:
+```bash
+mkdir -p /etc/dropbear
+dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key
+dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key
+```
 
 ### Permission Denied
 
 **Symptom:** `Permission denied (publickey)`
 
-**Causes & Solutions:**
-
-1. **File ownership wrong**
-   ```bash
-   # Fix ownership
-   chown 0:0 /etc/passwd /etc/shadow /etc/group
-   chmod 644 /etc/passwd
-   chmod 640 /etc/shadow
-   chmod 644 /etc/group
-   ```
-
-2. **User doesn't exist**
-   ```bash
-   # Check /etc/passwd has root user
-   cat /etc/passwd
-   # Should contain: root:x:0:0:root:/root:/bin/sh
-   ```
-
-3. **Shell not in /etc/shells**
-   ```bash
-   echo "/bin/sh" > /etc/shells
-   ```
+**Solution:**
+```bash
+# Fix file ownership
+chown 0:0 /etc/passwd /etc/shadow /etc/group
+chmod 644 /etc/passwd
+chmod 640 /etc/shadow
+chmod 644 /etc/group
+```
 
 ### "Login attempt for nonexistent user"
 
-**Symptom:** Dropbear logs show this error.
-
-**Cause:** Static Dropbear can't use NSS to look up users. Files must have correct ownership.
+**Cause:** Files owned by wrong UID.
 
 **Solution:**
 ```bash
-# Files MUST be owned by root (UID 0)
-chown 0:0 /etc/passwd /etc/shadow /etc/group
+chown 0:0 /etc/passwd /etc/shadow
 ```
 
 ## Serial Console Debugging
 
-### Setup Serial Connection
+### Setup
 
-You need a USB-to-Serial adapter connected to Pi's GPIO:
+Connect USB-to-Serial adapter:
 
 | Pi Pin | Signal | Adapter |
 |--------|--------|---------|
@@ -244,9 +181,6 @@ screen /dev/ttyUSB0 115200
 
 # macOS
 screen /dev/tty.usbserial-* 115200
-
-# Or use minicom
-minicom -D /dev/ttyUSB0 -b 115200
 ```
 
 ### Enable Serial Output
@@ -261,80 +195,42 @@ In `cmdline.txt`:
 console=serial0,115200 console=tty1 ...
 ```
 
-## Init System Debugging
-
-### Add Debug Output
-
-Edit `init/src/main.rs` and add print statements:
-
-```rust
-println!("[init] DEBUG: Starting mount_filesystems");
-mount_filesystems()?;
-println!("[init] DEBUG: Finished mount_filesystems");
-```
-
-### Run Init Manually
-
-If you have shell access (via serial), you can test init:
+## Useful Debug Commands
 
 ```bash
-# Kill current init (careful!)
-# Then run your init binary directly
-/sbin/init
-```
-
-### Check Init with QEMU
-
-Test your init binary on your host machine:
-
-```bash
-# Install QEMU user-mode
-sudo apt install qemu-user-static
-
-# Run init (won't fully work but tests basic execution)
-qemu-aarch64-static ./target/aarch64-unknown-linux-musl/release/rustpi-init
-```
-
-## Useful Commands
-
-### Check Boot Messages
-
-```bash
+# Boot messages
 dmesg | head -100
-```
 
-### Check Mounted Filesystems
-
-```bash
+# Mounted filesystems
 mount
 cat /proc/mounts
-```
 
-### Check Running Processes
-
-```bash
+# Processes
 ps aux
-```
 
-### Check Memory
-
-```bash
+# Memory
 free -m
-cat /proc/meminfo
-```
 
-### Check Storage
-
-```bash
+# Storage
 df -h
 cat /proc/partitions
-```
 
-### Network Status
-
-```bash
+# Network
 ifconfig -a
 route -n
 cat /etc/resolv.conf
 ping 8.8.8.8
+```
+
+## Rebuilding After Changes
+
+```bash
+# In Vagrant
+vagrant ssh
+clean
+build
+
+# Native
+./scripts/clean.sh
+./scripts/build-all.sh
 ```

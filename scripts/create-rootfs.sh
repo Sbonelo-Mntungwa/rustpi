@@ -18,6 +18,7 @@ mkdir -p "$ROOTFS"/usr/{bin,sbin,share}
 mkdir -p "$ROOTFS"/usr/share/udhcpc
 mkdir -p "$ROOTFS"/var/{log,run}
 mkdir -p "$ROOTFS"/etc/dropbear
+mkdir -p "$ROOTFS"/lib/modules
 
 echo "[rootfs] Copying binaries..."
 
@@ -30,7 +31,7 @@ cp "$BUILD_DIR/bin/busybox" "$ROOTFS/bin/busybox"
 chmod 755 "$ROOTFS/bin/busybox"
 
 # Create BusyBox symlinks
-BUSYBOX_CMDS="sh ash bash cat ls cp mv rm mkdir rmdir chmod chown chgrp
+BUSYBOX_CMDS="sh ash cat ls cp mv rm mkdir rmdir chmod chown chgrp
     ln touch echo printf head tail grep sed awk cut sort uniq wc
     mount umount mknod mkfifo
     ps top kill killall sleep
@@ -44,23 +45,28 @@ BUSYBOX_CMDS="sh ash bash cat ls cp mv rm mkdir rmdir chmod chown chgrp
     clear reset
     test [ true false
     env export set unset
-    modprobe insmod rmmod lsmod"
+    modprobe insmod rmmod lsmod
+    find xargs
+    stty
+    getty"
 
 cd "$ROOTFS/bin"
 for cmd in $BUSYBOX_CMDS; do
-    ln -sf busybox "$cmd"
+    ln -sf busybox "$cmd" 2>/dev/null || true
 done
 
 # Also create in /sbin for system commands
 cd "$ROOTFS/sbin"
-for cmd in ifconfig route ip modprobe insmod rmmod mount umount mknod; do
-    ln -sf ../bin/busybox "$cmd"
+for cmd in ifconfig route ip modprobe insmod rmmod mount umount mknod init halt reboot poweroff; do
+    ln -sf ../bin/busybox "$cmd" 2>/dev/null || true
 done
 
 # Copy Dropbear
-cp "$BUILD_DIR/bin/dropbear" "$ROOTFS/bin/"
-cp "$BUILD_DIR/bin/dropbearkey" "$ROOTFS/bin/"
-chmod 755 "$ROOTFS/bin/dropbear" "$ROOTFS/bin/dropbearkey"
+if [ -f "$BUILD_DIR/bin/dropbear" ]; then
+    cp "$BUILD_DIR/bin/dropbear" "$ROOTFS/bin/"
+    cp "$BUILD_DIR/bin/dropbearkey" "$ROOTFS/bin/"
+    chmod 755 "$ROOTFS/bin/dropbear" "$ROOTFS/bin/dropbearkey"
+fi
 
 echo "[rootfs] Creating configuration files..."
 
@@ -90,8 +96,11 @@ nobody:x:65534:
 EOF
 
 # /etc/hostname
-cp "$PROJECT_DIR/rootfs/etc/hostname" "$ROOTFS/etc/hostname" 2>/dev/null || \
+if [ -f "$PROJECT_DIR/rootfs/etc/hostname" ]; then
+    cp "$PROJECT_DIR/rootfs/etc/hostname" "$ROOTFS/etc/hostname"
+else
     echo "rustpi" > "$ROOTFS/etc/hostname"
+fi
 
 # /etc/hosts
 cat > "$ROOTFS/etc/hosts" << 'EOF'
@@ -120,6 +129,14 @@ EOF
 cat > "$ROOTFS/etc/shells" << 'EOF'
 /bin/sh
 /bin/ash
+EOF
+
+# /etc/inittab (for BusyBox init fallback)
+cat > "$ROOTFS/etc/inittab" << 'EOF'
+::sysinit:/sbin/init
+::respawn:/bin/getty -L tty1 115200 vt100
+::restart:/sbin/init
+::shutdown:/bin/umount -a -r
 EOF
 
 # UDHCPC script
@@ -155,13 +172,14 @@ touch "$ROOTFS/etc/resolv.conf"
 # Create device nodes
 echo "[rootfs] Creating device nodes..."
 cd "$ROOTFS/dev"
-sudo mknod -m 666 null c 1 3
-sudo mknod -m 666 zero c 1 5
-sudo mknod -m 666 random c 1 8
-sudo mknod -m 666 urandom c 1 9
-sudo mknod -m 666 tty c 5 0
-sudo mknod -m 600 console c 5 1
-sudo mknod -m 666 ptmx c 5 2
+sudo mknod -m 666 null c 1 3 2>/dev/null || true
+sudo mknod -m 666 zero c 1 5 2>/dev/null || true
+sudo mknod -m 666 random c 1 8 2>/dev/null || true
+sudo mknod -m 666 urandom c 1 9 2>/dev/null || true
+sudo mknod -m 666 tty c 5 0 2>/dev/null || true
+sudo mknod -m 600 console c 5 1 2>/dev/null || true
+sudo mknod -m 666 ptmx c 5 2 2>/dev/null || true
+sudo mknod -m 660 tty1 c 4 1 2>/dev/null || true
 
 # Set ownership
 echo "[rootfs] Setting permissions..."
