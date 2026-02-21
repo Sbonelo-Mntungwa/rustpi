@@ -1,47 +1,46 @@
-//! RustPi Init System
-//!
-//! A minimal init system (PID 1) for the RustPi Linux distribution.
-//! Handles system initialization, service management, and process supervision.
-
 use nix::mount::{mount, MsFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{execv, fork, sethostname, ForkResult, Pid};
+use nix::unistd::{execv, fork, ForkResult, Pid, sethostname, setsid};
 use std::ffi::CString;
-use std::fs::{self};
-use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::os::unix::io::AsRawFd;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-const VERSION: &str = "0.5.0";
-const HOSTNAME_FILE: &str = "/etc/hostname";
-const DEFAULT_HOSTNAME: &str = "rustpi";
-
 fn main() {
-    // Verify we're running as PID 1
     if std::process::id() != 1 {
-        eprintln!("[init] Warning: Not running as PID 1 (running as PID {})", std::process::id());
-        eprintln!("[init] This binary is designed to be the init process");
+        eprintln!("[init] Error: Must run as PID 1");
+        std::process::exit(1);
     }
 
-    print_banner();
+    println!();
+    println!("=============================================");
+    println!("  RustPi Init v0.5.0");
+    println!("=============================================");
+    println!();
 
-    // Initialize the system
-    if let Err(e) = init_system() {
-        eprintln!("[init] FATAL: System initialization failed: {}", e);
-        emergency_shell();
-    }
+    let _ = mount_filesystems();
+    let _ = setup_hostname();
+    let _ = setup_devices();
+    print_system_info();
+    
+    // Start networking
+    setup_networking();
+    
+    // Start SSH server
+    start_ssh_server();
+    
+    // Start shell
+    spawn_shell();
 
-    // Main loop: reap zombie processes
-    println!("[init] System ready. Entering main loop.");
     loop {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-            Ok(WaitStatus::Exited(pid, status)) => {
-                println!("[init] Process {} exited with status {}", pid, status);
-            }
-            Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                println!("[init] Process {} killed by signal {:?}", pid, signal);
+            Ok(WaitStatus::Exited(pid, _)) | Ok(WaitStatus::Signaled(pid, _, _)) => {
+                println!("[init] Process {} exited, respawning shell...", pid);
+                thread::sleep(Duration::from_secs(2));
+                spawn_shell();
             }
             _ => {}
         }
@@ -49,239 +48,199 @@ fn main() {
     }
 }
 
-fn print_banner() {
-    println!("=============================================");
-    println!("  RustPi Init v{}", VERSION);
-    println!("=============================================");
-}
+fn mount_filesystems() -> Result<(), String> {
+    println!("[init] Mounting filesystems...");
 
-fn init_system() -> Result<(), Box<dyn std::error::Error>> {
-    mount_filesystems()?;
-    println!("[init] Mounted filesystems");
-
-    setup_hostname()?;
-
-    setup_devices()?;
-    println!("[init] Device nodes ready");
-
-    load_kernel_modules();
-
-    setup_networking();
-
-    setup_ssh_keys();
-
-    start_ssh_server();
-
-    spawn_shell();
-
-    Ok(())
-}
-
-fn mount_filesystems() -> Result<(), Box<dyn std::error::Error>> {
-    for dir in &["/proc", "/sys", "/dev", "/dev/pts", "/tmp", "/run"] {
-        fs::create_dir_all(dir).ok();
+    print!("[init]   /proc... ");
+    io::stdout().flush().ok();
+    match mount(Some("proc"), "/proc", Some("proc"), MsFlags::empty(), None::<&str>) {
+        Ok(_) => println!("OK"),
+        Err(e) => println!("SKIP ({})", e),
     }
 
-    mount(
-        Some("proc"),
-        "/proc",
-        Some("proc"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV,
-        None::<&str>,
-    )?;
+    print!("[init]   /sys... ");
+    io::stdout().flush().ok();
+    match mount(Some("sysfs"), "/sys", Some("sysfs"), MsFlags::empty(), None::<&str>) {
+        Ok(_) => println!("OK"),
+        Err(e) => println!("SKIP ({})", e),
+    }
 
-    mount(
-        Some("sysfs"),
-        "/sys",
-        Some("sysfs"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV,
-        None::<&str>,
-    )?;
-
-    mount(
-        Some("devtmpfs"),
-        "/dev",
-        Some("devtmpfs"),
-        MsFlags::MS_NOSUID,
-        Some("mode=0755"),
-    )?;
-
-    mount(
-        Some("devpts"),
-        "/dev/pts",
-        Some("devpts"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC,
-        Some("mode=0620,ptmxmode=0666"),
-    )?;
-
-    mount(
-        Some("tmpfs"),
-        "/tmp",
-        Some("tmpfs"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
-        Some("mode=1777"),
-    )?;
-
-    mount(
-        Some("tmpfs"),
-        "/run",
-        Some("tmpfs"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
-        Some("mode=0755"),
-    )?;
-
-    Ok(())
-}
-
-fn setup_hostname() -> Result<(), Box<dyn std::error::Error>> {
-    let hostname = if Path::new(HOSTNAME_FILE).exists() {
-        fs::read_to_string(HOSTNAME_FILE)
-            .unwrap_or_else(|_| DEFAULT_HOSTNAME.to_string())
-            .trim()
-            .to_string()
+    print!("[init]   /dev... ");
+    io::stdout().flush().ok();
+    if fs::read_dir("/dev").map(|mut d| d.next().is_some()).unwrap_or(false) {
+        println!("ALREADY MOUNTED");
     } else {
-        DEFAULT_HOSTNAME.to_string()
-    };
+        match mount(Some("devtmpfs"), "/dev", Some("devtmpfs"), MsFlags::empty(), None::<&str>) {
+            Ok(_) => println!("OK"),
+            Err(e) => println!("SKIP ({})", e),
+        }
+    }
 
-    sethostname(&hostname)?;
-    println!("[init] Hostname set to: {}", hostname);
+    print!("[init]   /dev/pts... ");
+    io::stdout().flush().ok();
+    let _ = fs::create_dir_all("/dev/pts");
+    match mount(Some("devpts"), "/dev/pts", Some("devpts"), MsFlags::empty(), Some("gid=5,mode=620,ptmxmode=0666")) {
+        Ok(_) => println!("OK"),
+        Err(e) => println!("SKIP ({})", e),
+    }
+
+    print!("[init]   /tmp... ");
+    io::stdout().flush().ok();
+    match mount(Some("tmpfs"), "/tmp", Some("tmpfs"), MsFlags::empty(), None::<&str>) {
+        Ok(_) => println!("OK"),
+        Err(e) => println!("SKIP ({})", e),
+    }
+
+    print!("[init]   /run... ");
+    io::stdout().flush().ok();
+    match mount(Some("tmpfs"), "/run", Some("tmpfs"), MsFlags::empty(), None::<&str>) {
+        Ok(_) => println!("OK"),
+        Err(e) => println!("SKIP ({})", e),
+    }
 
     Ok(())
 }
 
-fn setup_devices() -> Result<(), Box<dyn std::error::Error>> {
-    let dev_links = [
+fn setup_hostname() -> Result<(), nix::Error> {
+    let hostname = fs::read_to_string("/etc/hostname")
+        .unwrap_or_else(|_| "rustpi".to_string())
+        .trim()
+        .to_string();
+    print!("[init] Setting hostname: {}... ", hostname);
+    io::stdout().flush().ok();
+    sethostname(&hostname)?;
+    println!("OK");
+    Ok(())
+}
+
+fn setup_devices() -> Result<(), io::Error> {
+    println!("[init] Setting up device nodes...");
+
+    let symlinks = [
         ("/dev/fd", "/proc/self/fd"),
         ("/dev/stdin", "/proc/self/fd/0"),
         ("/dev/stdout", "/proc/self/fd/1"),
         ("/dev/stderr", "/proc/self/fd/2"),
     ];
 
-    for (link, target) in &dev_links {
-        if !Path::new(link).exists() {
-            symlink(target, link).ok();
+    for (link, target) in symlinks {
+        if !std::path::Path::new(link).exists() {
+            let _ = std::os::unix::fs::symlink(target, link);
         }
     }
 
-    if !Path::new("/dev/ptmx").exists() {
-        symlink("/dev/pts/ptmx", "/dev/ptmx").ok();
+    if !std::path::Path::new("/dev/ptmx").exists() {
+        let _ = std::os::unix::fs::symlink("/dev/pts/ptmx", "/dev/ptmx");
     }
 
     Ok(())
 }
 
-fn load_kernel_modules() {
-    println!("[init] Loading kernel modules...");
-
-    let modules = [
-        "dm9601",
-        "asix",
-        "cdc_ether",
-        "r8152",
-        "smsc95xx",
-    ];
-
-    for module in &modules {
-        let result = Command::new("/sbin/modprobe")
-            .arg(module)
-            .output();
-
-        if let Ok(output) = result {
-            if output.status.success() {
-                println!("[init] Loaded module: {}", module);
-            }
+fn print_system_info() {
+    println!();
+    if let Ok(v) = fs::read_to_string("/proc/version") {
+        println!("[init] Kernel: {}", v.split_whitespace().take(3).collect::<Vec<_>>().join(" "));
+    }
+    if let Ok(m) = fs::read_to_string("/proc/meminfo") {
+        for line in m.lines().take(2) {
+            println!("[init] {}", line);
         }
     }
-
-    thread::sleep(Duration::from_secs(2));
+    println!();
 }
 
 fn setup_networking() {
-    println!("[init] Configuring network...");
+    println!("[init] Setting up networking...");
 
-    let interface = find_network_interface();
-
-    if let Some(iface) = interface {
-        println!("[init] Found network interface: {}", iface);
-
-        Command::new("/sbin/ifconfig")
-            .args([&iface, "up"])
-            .output()
-            .ok();
-
-        let dhcp_result = Command::new("/sbin/udhcpc")
-            .args([
-                "-i", &iface,
-                "-s", "/usr/share/udhcpc/default.script",
-                "-p", "/var/run/udhcpc.pid",
-                "-b",
-            ])
-            .output();
-
-        match dhcp_result {
-            Ok(output) if output.status.success() => {
-                println!("[init] DHCP client started on {}", iface);
-            }
-            Ok(output) => {
-                eprintln!("[init] DHCP failed: {}", String::from_utf8_lossy(&output.stderr));
-            }
-            Err(e) => {
-                eprintln!("[init] Failed to start DHCP: {}", e);
-            }
-        }
-
-        thread::sleep(Duration::from_secs(3));
-
-        if let Ok(output) = Command::new("/sbin/ifconfig").arg(&iface).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            for line in output_str.lines() {
-                if line.contains("inet ") {
-                    println!("[init] {}", line.trim());
-                }
-            }
-        }
-    } else {
-        eprintln!("[init] No network interface found");
-    }
-}
-
-fn find_network_interface() -> Option<String> {
-    let interfaces = ["eth0", "usb0", "enp0s", "end0"];
-
-    for iface in &interfaces {
-        let path = format!("/sys/class/net/{}", iface);
-        if Path::new(&path).exists() {
-            return Some(iface.to_string());
-        }
+    // Bring up loopback
+    print!("[init]   Loopback (lo)... ");
+    io::stdout().flush().ok();
+    let lo_result = Command::new("/bin/ifconfig")
+        .args(["lo", "127.0.0.1", "netmask", "255.0.0.0", "up"])
+        .status();
+    match lo_result {
+        Ok(s) if s.success() => println!("OK"),
+        _ => println!("FAILED"),
     }
 
+    // List available network interfaces
+    println!("[init]   Available interfaces:");
     if let Ok(entries) = fs::read_dir("/sys/class/net") {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name != "lo" && !name.starts_with("wlan") {
-                return Some(name);
+            println!("[init]     - {}", name);
+        }
+    }
+
+    // Try to find any non-loopback network interface
+    let mut eth_interface: Option<String> = None;
+    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name != "lo" {
+                eth_interface = Some(name);
+                break;
             }
         }
     }
 
-    None
-}
+    let iface = match eth_interface {
+        Some(i) => i,
+        None => {
+            println!("[init]   No ethernet interface found!");
+            return;
+        }
+    };
 
-fn setup_ssh_keys() {
-    let key_types = [
-        ("rsa", "/etc/dropbear/dropbear_rsa_host_key"),
-        ("ecdsa", "/etc/dropbear/dropbear_ecdsa_host_key"),
-    ];
+    println!("[init]   Using interface: {}", iface);
 
-    fs::create_dir_all("/etc/dropbear").ok();
+    // Bring up interface
+    print!("[init]   Bringing up {}... ", iface);
+    io::stdout().flush().ok();
+    let _ = Command::new("/bin/ifconfig")
+        .args([&iface, "up"])
+        .status();
+    println!("OK");
 
-    for (key_type, key_path) in &key_types {
-        if !Path::new(key_path).exists() {
-            println!("[init] Generating {} host key...", key_type);
-            Command::new("/bin/dropbearkey")
-                .args(["-t", key_type, "-f", key_path])
-                .output()
-                .ok();
+    print!("[init]   Getting IP via DHCP... ");
+    io::stdout().flush().ok();
+    let dhcp_result = Command::new("/bin/udhcpc")
+        .args(["-i", &iface, "-n", "-q", "-s", "/etc/udhcpc/default.script"])
+        .status();
+    match dhcp_result {
+        Ok(s) if s.success() => println!("OK"),
+        _ => {
+            println!("FAILED - trying static IP fallback");
+
+            print!("[init]   Assigning 192.168.1.100/24... ");
+            io::stdout().flush().ok();
+            let static_result = Command::new("/bin/ifconfig")
+                .args([&iface, "192.168.1.100", "netmask", "255.255.255.0", "up"])
+                .status();
+            match static_result {
+                Ok(s) if s.success() => println!("OK"),
+                _ => println!("FAILED"),
+            }
+
+            print!("[init]   Adding default route via 192.168.1.1... ");
+            io::stdout().flush().ok();
+            let route_result = Command::new("/bin/ip")
+                .args(["route", "add", "default", "via", "192.168.1.1"])
+                .status();
+            match route_result {
+                Ok(s) if s.success() => println!("OK"),
+                _ => println!("FAILED"),
+            }
+        }
+    }
+
+    // Show IP address
+    if let Ok(output) = Command::new("/bin/ifconfig").arg(&iface).output() {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.contains("inet ") || line.contains("inet addr") {
+                println!("[init]   {}", line.trim());
+            }
         }
     }
 }
@@ -289,66 +248,78 @@ fn setup_ssh_keys() {
 fn start_ssh_server() {
     println!("[init] Starting SSH server...");
 
-    match unsafe { fork() } {
-        Ok(ForkResult::Child) => {
-            let args = [
-                CString::new("/bin/dropbear").unwrap(),
-                CString::new("-F").unwrap(),
-                CString::new("-E").unwrap(),
-                CString::new("-R").unwrap(),
-            ];
+    // Create host keys if they don't exist
+    let key_path = "/etc/dropbear/dropbear_rsa_host_key";
+    if !std::path::Path::new(key_path).exists() {
+        print!("[init]   Generating host key... ");
+        io::stdout().flush().ok();
+        let _ = fs::create_dir_all("/etc/dropbear");
+        let keygen = Command::new("/bin/dropbearkey")
+            .args(["-t", "rsa", "-f", key_path])
+            .status();
+        match keygen {
+            Ok(s) if s.success() => println!("OK"),
+            _ => println!("FAILED"),
+        }
+    }
 
-            let arg_refs: Vec<&CString> = args.iter().collect();
-            execv(&args[0], &arg_refs).ok();
-            std::process::exit(1);
-        }
-        Ok(ForkResult::Parent { child }) => {
-            println!("[init] SSH server started (PID {})", child);
-        }
-        Err(e) => {
-            eprintln!("[init] Failed to fork SSH server: {}", e);
-        }
+    // Start dropbear SSH server
+    print!("[init]   Starting dropbear... ");
+    io::stdout().flush().ok();
+    let dropbear = Command::new("/bin/dropbear")
+        .args(["-R", "-E", "-p", "0.0.0.0:22"])
+        .spawn();
+    match dropbear {
+        Ok(_) => println!("OK (port 22)"),
+        Err(e) => println!("FAILED ({})", e),
+    }
+
+    // Also start telnetd as backup
+    print!("[init]   Starting telnetd... ");
+    io::stdout().flush().ok();
+    let telnetd = Command::new("/bin/telnetd")
+        .args(["-l", "/bin/sh"])
+        .spawn();
+    match telnetd {
+        Ok(_) => println!("OK (port 23)"),
+        Err(e) => println!("FAILED ({})", e),
     }
 }
 
-fn spawn_shell() {
-    println!("[init] Spawning login shell...");
+
+fn spawn_shell() -> Option<Pid> {
+    println!("[init] Starting shell...");
 
     match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => Some(child),
         Ok(ForkResult::Child) => {
-            let args = [
-                CString::new("/bin/sh").unwrap(),
-                CString::new("-l").unwrap(),
-            ];
+            let _ = setsid();
+
+            if let Ok(console) = OpenOptions::new().read(true).write(true).open("/dev/console") {
+                let fd = console.as_raw_fd();
+                unsafe {
+                    libc::ioctl(fd, libc::TIOCSCTTY, 0);
+                    libc::dup2(fd, 0);
+                    libc::dup2(fd, 1);
+                    libc::dup2(fd, 2);
+                }
+            }
 
             std::env::set_var("HOME", "/root");
-            std::env::set_var("TERM", "linux");
             std::env::set_var("PATH", "/bin:/sbin:/usr/bin:/usr/sbin");
-            std::env::set_var("SHELL", "/bin/sh");
+            std::env::set_var("TERM", "linux");
+            std::env::set_var("PS1", "rustpi# ");
 
-            let arg_refs: Vec<&CString> = args.iter().collect();
-            execv(&args[0], &arg_refs).ok();
+            let shell = CString::new("/bin/sh").unwrap();
+            let arg0 = CString::new("-sh").unwrap();
+            let _ = execv(&shell, &[arg0]);
+
+            eprintln!("[init] Failed to start shell!");
             std::process::exit(1);
         }
-        Ok(ForkResult::Parent { child }) => {
-            println!("[init] Shell spawned (PID {})", child);
-        }
         Err(e) => {
-            eprintln!("[init] Failed to spawn shell: {}", e);
+            eprintln!("[init] Fork failed: {}", e);
+            None
         }
-    }
-}
-
-fn emergency_shell() {
-    eprintln!("[init] Dropping to emergency shell...");
-
-    let args = [
-        CString::new("/bin/sh").unwrap(),
-    ];
-    let arg_refs: Vec<&CString> = args.iter().collect();
-    execv(&args[0], &arg_refs).ok();
-
-    loop {
-        thread::sleep(Duration::from_secs(1));
     }
 }
