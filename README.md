@@ -47,7 +47,7 @@ vagrant plugin install vagrant-vmware-desktop
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/YOUR_USERNAME/rustpi.git
+git clone https://github.com/Sbonelo-Mntungwa/rustpi.git
 cd rustpi
 
 # 2. Start the VM (first time takes ~10 min)
