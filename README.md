@@ -1,6 +1,6 @@
 # RustPi
 
-A minimal Linux distribution for Raspberry Pi 3B with a custom Rust-based init system.
+A minimal Linux distribution for Raspberry Pi 3A+ with a custom Rust-based init system.
 
 ## What is RustPi?
 
@@ -9,7 +9,7 @@ RustPi is a from-scratch Linux distribution that boots in ~3 seconds and include
 - **Custom Rust Init System** - PID 1 written in Rust
 - **BusyBox** - 300+ Unix utilities in one binary
 - **Dropbear SSH** - Lightweight SSH server for remote access
-- **Compiled Linux Kernel** - Built specifically for Pi 3B
+- **Compiled Linux Kernel** - Built specifically for Pi 3A+
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -26,7 +26,7 @@ RustPi is a from-scratch Linux distribution that boots in ~3 seconds and include
 ## Requirements
 
 ### Hardware
-- Raspberry Pi 3 Model B (or 3A+)
+- Raspberry Pi 3 Model 3A+
 - SD card (8GB+)
 - Ethernet cable
 - Power supply
