@@ -26,7 +26,7 @@ RustPi is a from-scratch Linux distribution that boots in ~3 seconds and include
 ## Requirements
 
 ### Hardware
-- Raspberry Pi 3 Model B (or 3B+)
+- Raspberry Pi 3 Model B (or 3A+)
 - SD card (8GB+)
 - Ethernet cable
 - Power supply
