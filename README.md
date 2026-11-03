@@ -2,7 +2,7 @@
 
 A minimal Linux distribution for Raspberry Pi 3A+ with a custom Rust-based init system.
 
-Boots in ~3 seconds with a Rust init (PID 1), BusyBox utilities, Dropbear SSH, and a custom-compiled kernel — all in a 512MB image.
+Boots in ~3 seconds with a Rust init (PID 1), BusyBox utilities, Dropbear SSH, and a custom-compiled kernel, all in a 512MB image.
 
 ## Quick Start
 
@@ -36,10 +36,10 @@ ssh root@<pi-ip>
 
 ## Architecture
 
-- **Rust init system** — PID 1 handling mounts, networking, SSH, and shell spawning
-- **Static linking** — all binaries are musl-linked, no shared libraries on the Pi
-- **Built-in kernel drivers** — all USB Ethernet drivers compiled as `=y`, no modules
-- **DHCP with fallback** — tries DHCP first, falls back to static IP 192.168.1.100
+- **Rust init system**: PID 1 handling mounts, networking, SSH, and shell spawning
+- **Static linking**: all binaries are musl-linked, no shared libraries on the Pi
+- **Built-in kernel drivers**: all USB Ethernet drivers compiled as `=y`, no modules
+- **DHCP with fallback**: tries DHCP first, falls back to static IP 192.168.1.100
 
 ## Requirements
 
@@ -117,4 +117,8 @@ rustpi/
 
 ## License
 
-MIT License — See LICENSE file
+[MIT](LICENSE) © 2025 Sbonelo Mntungwa
+
+## Contributing
+
+This repository doesn't take pull requests. To report a bug or suggest a change, please [open an issue](https://github.com/Sbonelo-Mntungwa/rustpi/issues/new). See [CONTRIBUTING.md](CONTRIBUTING.md).
